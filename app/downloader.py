@@ -1,5 +1,6 @@
 import os
 import uuid
+import tempfile
 import threading
 import logging
 import yt_dlp
@@ -9,14 +10,31 @@ import static_ffmpeg
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Safely initialize static ffmpeg
+# Safely initialize static ffmpeg without crashing on read-only file systems (like Vercel)
 try:
     static_ffmpeg.add_paths()
 except Exception as e:
-    logger.warning(f"Static ffmpeg path initialization skipped or failed: {e}")
+    logger.warning(f"Static ffmpeg path initialization skipped: {e}")
 
-DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "downloads")
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+# Determine a writable download directory.
+# Vercel and AWS Lambda serverless environments have a read-only filesystem except for /tmp.
+try:
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    target_dir = os.path.join(base_dir, "downloads")
+    os.makedirs(target_dir, exist_ok=True)
+    
+    # Verify write access by attempting to create and remove a test file
+    test_file = os.path.join(target_dir, ".perm_test")
+    with open(test_file, "w") as f:
+        f.write("test")
+    os.remove(test_file)
+    
+    DOWNLOAD_DIR = target_dir
+except Exception:
+    DOWNLOAD_DIR = os.path.join(tempfile.gettempdir(), "downloads")
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+logger.info(f"Using DOWNLOAD_DIR: {DOWNLOAD_DIR}")
 
 # Global dictionary to track active task progress
 tasks_progress = {}
