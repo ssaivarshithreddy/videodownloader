@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Universal Video & Media Downloader</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <i class="fa-solid fa-cloud-arrow-down logo-icon"></i>
+                <span class="logo-title">OmniFetch</span>
+                <span class="badge">PRO</span>
+            </div>
+            <p class="tagline">Download videos & audio from YouTube, Instagram, TikTok, X/Twitter, Facebook, and more.</p>
+        </header>
+
+        <!-- Platform Pills -->
+        <div class="platforms">
+            <span class="platform-chip yt"><i class="fa-brands fa-youtube"></i> YouTube</span>
+            <span class="platform-chip insta"><i class="fa-brands fa-instagram"></i> Instagram</span>
+            <span class="platform-chip tiktok"><i class="fa-brands fa-tiktok"></i> TikTok</span>
+            <span class="platform-chip twitter"><i class="fa-brands fa-x-twitter"></i> X / Twitter</span>
+            <span class="platform-chip fb"><i class="fa-brands fa-facebook"></i> Facebook</span>
+            <span class="platform-chip reddit"><i class="fa-brands fa-reddit"></i> Reddit</span>
+        </div>
+
+        <!-- URL Input Box -->
+        <div class="search-card">
+            <div class="input-wrapper">
+                <i class="fa-solid fa-link input-icon"></i>
+                <input type="text" id="urlInput" placeholder="Paste link here (e.g., https://www.youtube.com/watch?v=...)" autocomplete="off">
+                <button id="pasteBtn" class="btn-paste" title="Paste from clipboard">
+                    <i class="fa-solid fa-paste"></i> Paste
+                </button>
+            </div>
+            <button id="fetchBtn" class="btn-fetch">
+                <i class="fa-solid fa-wand-magic-sparkles"></i> Fetch Details
+            </button>
+        </div>
+
+        <!-- Error Alert -->
+        <div id="errorAlert" class="alert-card hidden">
+            <i class="fa-solid fa-triangle-exclamation"></i>
+            <span id="errorMessage">Something went wrong.</span>
+        </div>
+
+        <!-- Loader Skeleton -->
+        <div id="loader" class="loader-container hidden">
+            <div class="spinner"></div>
+            <p>Fetching video details...</p>
+        </div>
+
+        <!-- Preview Card -->
+        <div id="previewCard" class="preview-card hidden">
+            <div class="preview-layout">
+                <div class="thumbnail-wrapper">
+                    <img id="videoThumb" src="" alt="Video Thumbnail">
+                    <span id="videoDuration" class="duration-badge">00:00</span>
+                </div>
+                <div class="details-wrapper">
+                    <div id="platformTag" class="platform-tag">YouTube</div>
+                    <h2 id="videoTitle" class="video-title">Video Title</h2>
+                    <p id="videoUploader" class="video-uploader"><i class="fa-solid fa-user"></i> Channel Name</p>
+
+                    <!-- Format Selector Tabs -->
+                    <div class="tab-header">
+                        <button id="tabVideo" class="tab-btn active"><i class="fa-solid fa-video"></i> Video (MP4)</button>
+                        <button id="tabAudio" class="tab-btn"><i class="fa-solid fa-music"></i> Audio Only (MP3)</button>
+                    </div>
+
+                    <!-- Quality Dropdown -->
+                    <div class="select-group">
+                        <label for="formatSelect"><i class="fa-solid fa-sliders"></i> Select Quality:</label>
+                        <select id="formatSelect" class="custom-select">
+                            <!-- Populated dynamically -->
+                        </select>
+                    </div>
+
+                    <!-- Download Trigger Button -->
+                    <button id="downloadBtn" class="btn-download">
+                        <i class="fa-solid fa-download"></i> Start Download
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Progress Card -->
+        <div id="progressCard" class="progress-card hidden">
+            <div class="progress-header">
+                <span id="progressStatusText" class="progress-status-text">Preparing download...</span>
+                <span id="progressPercent" class="progress-percent">0%</span>
+            </div>
+            <div class="progress-bar-bg">
+                <div id="progressBarFill" class="progress-bar-fill"></div>
+            </div>
+            <div class="progress-meta">
+                <span><i class="fa-solid fa-gauge-high"></i> <span id="progressSpeed">0 KB/s</span></span>
+                <span><i class="fa-solid fa-clock"></i> ETA: <span id="progressEta">--:--</span></span>
+            </div>
+            <div id="completedActions" class="completed-actions hidden">
+                <a id="saveFileBtn" href="#" download class="btn-save">
+                    <i class="fa-solid fa-file-arrow-down"></i> Save File to Device
+                </a>
+            </div>
+        </div>
+
+        <!-- Recent Downloads History -->
+        <div class="history-section">
+            <div class="history-header">
+                <h3><i class="fa-solid fa-clock-rotate-left"></i> Session Downloads</h3>
+                <button id="clearHistoryBtn" class="btn-text">Clear</button>
+            </div>
+            <div id="historyList" class="history-list">
+                <p class="empty-history">No downloads yet in this session.</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+# Virtual Environments
+venv/
+.venv/
+env/
+
+# Downloaded files output directory
+downloads/
+*.mp4
+*.mp3
+*.m4a
+*.webm
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# IDE / OS metadata
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

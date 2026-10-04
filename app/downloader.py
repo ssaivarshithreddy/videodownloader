@@ -1,0 +1,226 @@
+import os
+import uuid
+import threading
+import yt_dlp
+import static_ffmpeg
+
+# Initialize static ffmpeg so yt-dlp has access to ffmpeg/ffprobe
+try:
+    static_ffmpeg.add_paths()
+except Exception as e:
+    print(f"Warning initializing static_ffmpeg: {e}")
+
+DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "downloads")
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+# Global dictionary to track active task progress
+tasks_progress = {}
+
+def get_video_info(url: str):
+    """
+    Extracts metadata, thumbnails, and available format options for a given video URL.
+    Supports YouTube, Instagram, TikTok, Twitter/X, Facebook, Reddit, etc.
+    """
+    ydl_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'extract_flat': False,
+        'skip_download': True,
+    }
+    
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        try:
+            info = ydl.extract_info(url, download=False)
+        except Exception as e:
+            raise ValueError(f"Failed to fetch video details: {str(e)}")
+
+    if 'entries' in info:
+        # Playlist or multi-video link, take the first entry for simple single view
+        info = info['entries'][0]
+
+    title = info.get('title', 'Unknown Title')
+    duration = info.get('duration')
+    duration_str = format_duration(duration) if duration else 'N/A'
+    thumbnail = info.get('thumbnail') or (info.get('thumbnails')[-1]['url'] if info.get('thumbnails') else None)
+    uploader = info.get('uploader') or info.get('channel') or info.get('extractor_key', 'Unknown')
+    extractor = info.get('extractor_key', 'Unknown')
+
+    # Process format choices
+    video_formats = []
+    audio_formats = []
+
+    # Standard predefined options
+    video_formats.append({
+        'format_id': 'bestvideo+bestaudio/best',
+        'label': 'Best Available Quality (Auto MP4)',
+        'ext': 'mp4',
+        'quality': 'Best'
+    })
+
+    seen_resolutions = set()
+    raw_formats = info.get('formats', [])
+    
+    # Sort and collect common video resolutions
+    for f in raw_formats:
+        vcodec = f.get('vcodec', 'none')
+        height = f.get('height')
+        ext = f.get('ext', 'mp4')
+
+        if vcodec != 'none' and height and height not in seen_resolutions:
+            seen_resolutions.add(height)
+            video_formats.append({
+                'format_id': f"bestvideo[height<={height}]+bestaudio/best[height<={height}]",
+                'label': f"{height}p ({ext.upper()})",
+                'ext': 'mp4',
+                'quality': f"{height}p"
+            })
+
+    # Sort video formats descending by height where possible
+    video_formats[1:] = sorted(
+        video_formats[1:],
+        key=lambda x: int(x['quality'].replace('p', '')) if x['quality'].replace('p', '').isdigit() else 0,
+        reverse=True
+    )
+
+    audio_formats = [
+        {'format_id': 'bestaudio/best', 'label': 'Best Audio (MP3)', 'ext': 'mp3', 'quality': '320kbps'},
+        {'format_id': 'bestaudio/best', 'label': 'Audio Only (M4A)', 'ext': 'm4a', 'quality': 'Best'}
+    ]
+
+    return {
+        'url': url,
+        'title': title,
+        'duration': duration_str,
+        'duration_seconds': duration,
+        'thumbnail': thumbnail,
+        'uploader': uploader,
+        'platform': extractor,
+        'video_formats': video_formats,
+        'audio_formats': audio_formats
+    }
+
+def format_duration(seconds: int) -> str:
+    if not seconds:
+        return 'N/A'
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    if h > 0:
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+def start_download_task(url: str, format_id: str, format_type: str = 'video') -> str:
+    """
+    Spawns a background thread to download the requested video/audio and returns a task_id.
+    """
+    task_id = str(uuid.uuid4())
+    tasks_progress[task_id] = {
+        'task_id': task_id,
+        'status': 'starting',
+        'percentage': 0.0,
+        'speed': '0 KB/s',
+        'eta': '--:--',
+        'downloaded_bytes': 0,
+        'total_bytes': 0,
+        'filename': '',
+        'filepath': '',
+        'error': None
+    }
+
+    thread = threading.Thread(target=_download_worker, args=(task_id, url, format_id, format_type), daemon=True)
+    thread.start()
+    return task_id
+
+def _download_worker(task_id: str, url: str, format_id: str, format_type: str):
+    def progress_hook(d):
+        if d['status'] == 'downloading':
+            total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
+            downloaded = d.get('downloaded_bytes', 0)
+            percentage = (downloaded / total * 100) if total > 0 else 0.0
+            
+            speed_bytes = d.get('speed') or 0
+            speed_str = format_speed(speed_bytes)
+            
+            eta = d.get('eta')
+            eta_str = f"{eta}s" if eta is not None else "--:--"
+
+            tasks_progress[task_id].update({
+                'status': 'downloading',
+                'percentage': round(percentage, 1),
+                'downloaded_bytes': downloaded,
+                'total_bytes': total,
+                'speed': speed_str,
+                'eta': eta_str
+            })
+        elif d['status'] == 'finished':
+            tasks_progress[task_id].update({
+                'status': 'processing',
+                'percentage': 99.0,
+                'filename': os.path.basename(d.get('filename', '')),
+                'filepath': d.get('filename', '')
+            })
+
+    output_template = os.path.join(DOWNLOAD_DIR, '%(title).100s_%(id)s.%(ext)s')
+
+    ydl_opts = {
+        'outtmpl': output_template,
+        'progress_hooks': [progress_hook],
+        'quiet': True,
+        'no_warnings': True,
+    }
+
+    if format_type == 'audio':
+        ext = 'mp3' if 'mp3' in format_id or format_id == 'bestaudio/best' else 'm4a'
+        ydl_opts.update({
+            'format': 'bestaudio/best',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': ext,
+                'preferredquality': '192',
+            }],
+        })
+    else:
+        ydl_opts.update({
+            'format': format_id if format_id else 'bestvideo+bestaudio/best',
+            'merge_output_format': 'mp4',
+        })
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+
+            # Adjust filename extension if post-processed
+            if format_type == 'audio':
+                base, _ = os.path.splitext(filename)
+                target_ext = 'mp3' if 'mp3' in format_id or format_id == 'bestaudio/best' else 'm4a'
+                possible_file = f"{base}.{target_ext}"
+                if os.path.exists(possible_file):
+                    filename = possible_file
+            elif not os.path.exists(filename):
+                base, _ = os.path.splitext(filename)
+                if os.path.exists(f"{base}.mp4"):
+                    filename = f"{base}.mp4"
+
+            tasks_progress[task_id].update({
+                'status': 'completed',
+                'percentage': 100.0,
+                'filename': os.path.basename(filename),
+                'filepath': filename
+            })
+    except Exception as e:
+        tasks_progress[task_id].update({
+            'status': 'failed',
+            'error': str(e)
+        })
+
+def format_speed(bytes_per_sec) -> str:
+    if not bytes_per_sec:
+        return '0 KB/s'
+    if bytes_per_sec >= 1024 * 1024:
+        return f"{bytes_per_sec / (1024 * 1024):.2f} MB/s"
+    elif bytes_per_sec >= 1024:
+        return f"{bytes_per_sec / 1024:.1f} KB/s"
+    return f"{bytes_per_sec} B/s"
+
+def get_task_status(task_id: str):
+    return tasks_progress.get(task_id, {'status': 'not_found'})
