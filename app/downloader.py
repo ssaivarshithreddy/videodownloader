@@ -39,29 +39,46 @@ logger.info(f"Using DOWNLOAD_DIR: {DOWNLOAD_DIR}")
 # Global dictionary to track active task progress
 tasks_progress = {}
 
+def get_yt_dlp_options(download: bool = False, output_template: str = None):
+    """
+    Returns optimized yt-dlp options bypassing YouTube bot detection & cloud IP blocks.
+    """
+    opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'extract_flat': False,
+        'skip_download': not download,
+        'nocheckcertificate': True,
+        'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Mobile/15E148 Safari/604.1',
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['ios', 'android', 'mweb', 'web']
+            }
+        }
+    }
+    if output_template:
+        opts['outtmpl'] = output_template
+    return opts
+
 def get_video_info(url: str):
     """
     Extracts metadata, thumbnails, and available format options for a given video URL.
     Supports YouTube, Instagram, TikTok, Twitter/X, Facebook, Reddit, etc.
     """
-    ydl_opts = {
-        'quiet': True,
-        'no_warnings': True,
-        'extract_flat': False,
-        'skip_download': True,
-        'nocheckcertificate': True,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'extractor_args': {
-            'youtube': ['player_client=android,web']
-        }
-    }
+    ydl_opts = get_yt_dlp_options(download=False)
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
     except Exception as e:
         logger.error(f"yt-dlp extract_info error for {url}: {e}")
-        raise ValueError(f"Failed to fetch video details: {str(e)}")
+        # Try fallback with android & web client if iOS client alone fails
+        try:
+            ydl_opts['extractor_args']['youtube']['player_client'] = ['android', 'web']
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as fallback_err:
+            raise ValueError(f"Failed to fetch video details: {str(fallback_err)}")
 
     if not info:
         raise ValueError("Could not retrieve video information.")
@@ -199,15 +216,8 @@ def _download_worker(task_id: str, url: str, format_id: str, format_type: str):
             })
 
     output_template = os.path.join(DOWNLOAD_DIR, '%(title).100s_%(id)s.%(ext)s')
-
-    ydl_opts = {
-        'outtmpl': output_template,
-        'progress_hooks': [progress_hook],
-        'quiet': True,
-        'no_warnings': True,
-        'nocheckcertificate': True,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    }
+    ydl_opts = get_yt_dlp_options(download=True, output_template=output_template)
+    ydl_opts['progress_hooks'] = [progress_hook]
 
     if format_type == 'audio':
         ext = 'mp3' if 'mp3' in format_id or format_id == 'bestaudio/best' else 'm4a'
