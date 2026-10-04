@@ -1,6 +1,6 @@
 import os
 import logging
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -32,7 +32,6 @@ app.add_middleware(
 )
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
-os.makedirs(STATIC_DIR, exist_ok=True)
 
 class InfoRequest(BaseModel):
     url: str
@@ -41,6 +40,17 @@ class DownloadRequest(BaseModel):
     url: str
     format_id: str
     format_type: str = "video"  # "video" or "audio"
+
+@app.get("/", response_class=FileResponse)
+async def serve_index():
+    index_path = os.path.join(STATIC_DIR, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    raise HTTPException(status_code=404, detail="index.html not found")
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(content=b"", media_type="image/x-icon")
 
 @app.post("/api/info")
 async def fetch_info(req: InfoRequest):
@@ -81,5 +91,6 @@ async def download_file(filename: str):
         raise HTTPException(status_code=404, detail="Requested file not found")
     return FileResponse(path=file_path, filename=filename, media_type="application/octet-stream")
 
-# Serve UI frontend static files
-app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+# Mount static files directory if it exists
+if os.path.exists(STATIC_DIR):
+    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
