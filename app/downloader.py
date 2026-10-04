@@ -1,14 +1,19 @@
 import os
 import uuid
 import threading
+import logging
 import yt_dlp
 import static_ffmpeg
 
-# Initialize static ffmpeg so yt-dlp has access to ffmpeg/ffprobe
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Safely initialize static ffmpeg
 try:
     static_ffmpeg.add_paths()
 except Exception as e:
-    print(f"Warning initializing static_ffmpeg: {e}")
+    logger.warning(f"Static ffmpeg path initialization skipped or failed: {e}")
 
 DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
@@ -26,45 +31,56 @@ def get_video_info(url: str):
         'no_warnings': True,
         'extract_flat': False,
         'skip_download': True,
+        'nocheckcertificate': True,
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'extractor_args': {
+            'youtube': ['player_client=android,web']
+        }
     }
     
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        try:
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-        except Exception as e:
-            raise ValueError(f"Failed to fetch video details: {str(e)}")
+    except Exception as e:
+        logger.error(f"yt-dlp extract_info error for {url}: {e}")
+        raise ValueError(f"Failed to fetch video details: {str(e)}")
 
-    if 'entries' in info:
-        # Playlist or multi-video link, take the first entry for simple single view
+    if not info:
+        raise ValueError("Could not retrieve video information.")
+
+    if 'entries' in info and info['entries']:
+        # Playlist or multi-video link, take the first valid entry
         info = info['entries'][0]
 
-    title = info.get('title', 'Unknown Title')
+    title = str(info.get('title') or 'Unknown Title')
     duration = info.get('duration')
     duration_str = format_duration(duration) if duration else 'N/A'
-    thumbnail = info.get('thumbnail') or (info.get('thumbnails')[-1]['url'] if info.get('thumbnails') else None)
-    uploader = info.get('uploader') or info.get('channel') or info.get('extractor_key', 'Unknown')
-    extractor = info.get('extractor_key', 'Unknown')
+    
+    thumbnail = None
+    if info.get('thumbnail'):
+        thumbnail = str(info['thumbnail'])
+    elif info.get('thumbnails') and len(info['thumbnails']) > 0:
+        thumbnail = str(info['thumbnails'][-1].get('url', ''))
+
+    uploader = str(info.get('uploader') or info.get('channel') or info.get('extractor_key') or 'Unknown')
+    extractor = str(info.get('extractor_key') or 'Unknown')
 
     # Process format choices
-    video_formats = []
-    audio_formats = []
-
-    # Standard predefined options
-    video_formats.append({
+    video_formats = [{
         'format_id': 'bestvideo+bestaudio/best',
         'label': 'Best Available Quality (Auto MP4)',
         'ext': 'mp4',
         'quality': 'Best'
-    })
+    }]
 
     seen_resolutions = set()
-    raw_formats = info.get('formats', [])
+    raw_formats = info.get('formats', []) or []
     
     # Sort and collect common video resolutions
     for f in raw_formats:
         vcodec = f.get('vcodec', 'none')
         height = f.get('height')
-        ext = f.get('ext', 'mp4')
+        ext = str(f.get('ext', 'mp4'))
 
         if vcodec != 'none' and height and height not in seen_resolutions:
             seen_resolutions.add(height)
@@ -76,11 +92,12 @@ def get_video_info(url: str):
             })
 
     # Sort video formats descending by height where possible
-    video_formats[1:] = sorted(
-        video_formats[1:],
-        key=lambda x: int(x['quality'].replace('p', '')) if x['quality'].replace('p', '').isdigit() else 0,
-        reverse=True
-    )
+    if len(video_formats) > 1:
+        video_formats[1:] = sorted(
+            video_formats[1:],
+            key=lambda x: int(x['quality'].replace('p', '')) if x['quality'].replace('p', '').isdigit() else 0,
+            reverse=True
+        )
 
     audio_formats = [
         {'format_id': 'bestaudio/best', 'label': 'Best Audio (MP3)', 'ext': 'mp3', 'quality': '320kbps'},
@@ -88,10 +105,10 @@ def get_video_info(url: str):
     ]
 
     return {
-        'url': url,
+        'url': str(url),
         'title': title,
         'duration': duration_str,
-        'duration_seconds': duration,
+        'duration_seconds': duration if isinstance(duration, (int, float)) else None,
         'thumbnail': thumbnail,
         'uploader': uploader,
         'platform': extractor,
@@ -99,14 +116,18 @@ def get_video_info(url: str):
         'audio_formats': audio_formats
     }
 
-def format_duration(seconds: int) -> str:
+def format_duration(seconds) -> str:
     if not seconds:
         return 'N/A'
-    m, s = divmod(int(seconds), 60)
-    h, m = divmod(m, 60)
-    if h > 0:
-        return f"{h:02d}:{m:02d}:{s:02d}"
-    return f"{m:02d}:{s:02d}"
+    try:
+        sec = int(seconds)
+        m, s = divmod(sec, 60)
+        h, m = divmod(m, 60)
+        if h > 0:
+            return f"{h:02d}:{m:02d}:{s:02d}"
+        return f"{m:02d}:{s:02d}"
+    except Exception:
+        return 'N/A'
 
 def start_download_task(url: str, format_id: str, format_type: str = 'video') -> str:
     """
@@ -166,6 +187,8 @@ def _download_worker(task_id: str, url: str, format_id: str, format_type: str):
         'progress_hooks': [progress_hook],
         'quiet': True,
         'no_warnings': True,
+        'nocheckcertificate': True,
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     }
 
     if format_type == 'audio':
@@ -208,6 +231,7 @@ def _download_worker(task_id: str, url: str, format_id: str, format_type: str):
                 'filepath': filename
             })
     except Exception as e:
+        logger.error(f"Download worker error for task {task_id}: {e}")
         tasks_progress[task_id].update({
             'status': 'failed',
             'error': str(e)

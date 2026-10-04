@@ -1,8 +1,10 @@
 import os
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+import logging
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel
 
 from app.downloader import (
     get_video_info,
@@ -11,10 +13,22 @@ from app.downloader import (
     DOWNLOAD_DIR
 )
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 app = FastAPI(
     title="Universal Video & Media Downloader",
     description="Download videos and audio from YouTube, Instagram, TikTok, Twitter/X, Facebook, and more.",
     version="1.0.0"
+)
+
+# Enable CORS for cross-origin frontend requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -35,8 +49,12 @@ async def fetch_info(req: InfoRequest):
     try:
         info = get_video_info(req.url.strip())
         return JSONResponse(content=info)
+    except ValueError as ve:
+        logger.warning(f"Validation error in /api/info: {ve}")
+        return JSONResponse(status_code=400, content={"detail": str(ve)})
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error(f"Unexpected error in /api/info: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"detail": f"Server error: {str(e)}"})
 
 @app.post("/api/download")
 async def trigger_download(req: DownloadRequest):
@@ -46,7 +64,8 @@ async def trigger_download(req: DownloadRequest):
         task_id = start_download_task(req.url.strip(), req.format_id, req.format_type)
         return JSONResponse(content={"task_id": task_id, "status": "started"})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error in /api/download: {e}")
+        return JSONResponse(status_code=500, content={"detail": str(e)})
 
 @app.get("/api/progress/{task_id}")
 async def check_progress(task_id: str):
