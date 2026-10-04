@@ -39,23 +39,39 @@ logger.info(f"Using DOWNLOAD_DIR: {DOWNLOAD_DIR}")
 # Global dictionary to track active task progress
 tasks_progress = {}
 
-def get_yt_dlp_options(download: bool = False, output_template: str = None):
+def get_yt_dlp_options(download: bool = False, output_template: str = None, client_list: list = None):
     """
     Returns optimized yt-dlp options bypassing YouTube bot detection & cloud IP blocks.
+    Strictly uses mobile Android & iOS API clients to bypass web bot verification.
     """
+    clients = client_list or ['android', 'ios']
     opts = {
         'quiet': True,
         'no_warnings': True,
         'extract_flat': False,
         'skip_download': not download,
         'nocheckcertificate': True,
-        'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Mobile/15E148 Safari/604.1',
+        'user_agent': 'com.google.android.youtube/19.09.37 (Linux; U; Android 11; US) gzip',
         'extractor_args': {
             'youtube': {
-                'player_client': ['ios', 'android', 'mweb', 'web']
+                'player_client': clients
             }
         }
     }
+
+    # Optional: Use cookies.txt if provided in root folder or via environment variable
+    cookies_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cookies.txt')
+    if os.path.exists(cookies_path):
+        opts['cookiefile'] = cookies_path
+    elif os.environ.get("YOUTUBE_COOKIES"):
+        try:
+            tmp_cookies = os.path.join(tempfile.gettempdir(), "youtube_cookies.txt")
+            with open(tmp_cookies, "w", encoding="utf-8") as f:
+                f.write(os.environ.get("YOUTUBE_COOKIES"))
+            opts['cookiefile'] = tmp_cookies
+        except Exception as ce:
+            logger.warning(f"Could not write cookies env var: {ce}")
+
     if output_template:
         opts['outtmpl'] = output_template
     return opts
@@ -65,23 +81,36 @@ def get_video_info(url: str):
     Extracts metadata, thumbnails, and available format options for a given video URL.
     Supports YouTube, Instagram, TikTok, Twitter/X, Facebook, Reddit, etc.
     """
-    ydl_opts = get_yt_dlp_options(download=False)
+    # Primary attempt using Android + iOS native app clients
+    ydl_opts = get_yt_dlp_options(download=False, client_list=['android', 'ios'])
     
+    info = None
+    last_err = None
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
     except Exception as e:
-        logger.error(f"yt-dlp extract_info error for {url}: {e}")
-        # Try fallback with android & web client if iOS client alone fails
+        last_err = e
+        logger.warning(f"Primary yt-dlp android+ios extract failed: {e}. Trying fallback clients...")
+        
+        # Fallback 1: Try iOS client specifically
         try:
-            ydl_opts['extractor_args']['youtube']['player_client'] = ['android', 'web']
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            fallback_opts = get_yt_dlp_options(download=False, client_list=['ios'])
+            with yt_dlp.YoutubeDL(fallback_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
-        except Exception as fallback_err:
-            raise ValueError(f"Failed to fetch video details: {str(fallback_err)}")
+        except Exception as fb_err1:
+            last_err = fb_err1
+            # Fallback 2: Try Android Creator client
+            try:
+                fallback_opts2 = get_yt_dlp_options(download=False, client_list=['android_creator'])
+                with yt_dlp.YoutubeDL(fallback_opts2) as ydl:
+                    info = ydl.extract_info(url, download=False)
+            except Exception as fb_err2:
+                last_err = fb_err2
 
     if not info:
-        raise ValueError("Could not retrieve video information.")
+        raise ValueError(f"Failed to fetch video details: {str(last_err)}")
 
     if 'entries' in info and info['entries']:
         # Playlist or multi-video link, take the first valid entry
@@ -216,7 +245,7 @@ def _download_worker(task_id: str, url: str, format_id: str, format_type: str):
             })
 
     output_template = os.path.join(DOWNLOAD_DIR, '%(title).100s_%(id)s.%(ext)s')
-    ydl_opts = get_yt_dlp_options(download=True, output_template=output_template)
+    ydl_opts = get_yt_dlp_options(download=True, output_template=output_template, client_list=['android', 'ios'])
     ydl_opts['progress_hooks'] = [progress_hook]
 
     if format_type == 'audio':
